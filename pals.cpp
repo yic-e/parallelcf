@@ -6,8 +6,8 @@
 using namespace std;
 using namespace als;
 int main(int argc, char *argv[]){
-    if(argc != 5){
-        cerr<<"usage: "<< argv[0] << " K data user_num movie_num" << endl;
+    if(argc != 6){
+        cerr<<"usage: "<< argv[0] << " K data user_num movie_num iter_num" << endl;
         return 1;
     }
     MPI_Init(&argc, &argv);
@@ -17,7 +17,7 @@ int main(int argc, char *argv[]){
     int movie_num = atoi(argv[4]);
     embedding user_embedding(user_num, K);
     embedding movie_embedding(movie_num, K);
-
+    int iter_num = atoi(argv[5]);
     ifstream ifs(data);
 
     while(ifs){
@@ -33,7 +33,7 @@ int main(int argc, char *argv[]){
     movie_embedding.sync();
     int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD,&world_rank);
-    for(int i = 0; i != 20; ++i){
+    for(int i = 0; i != iter_num; ++i){
         if(user_embedding.get_rank() == 0)
             printf("iter=%d\n", i);
         update(user_embedding, movie_embedding, 0.01);
