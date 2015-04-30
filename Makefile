@@ -1,4 +1,4 @@
-CXX = mpic++
+CXX = /opt/mpich2/gnu/bin/mpic++
 CXX_FLAGS = -std=c++11 -g -O0 -DBOOST_UBLAS_NDEBUG=1 
 
 all: pals
