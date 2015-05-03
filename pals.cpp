@@ -11,11 +11,16 @@ int main(int argc, char *argv[]){
         return 1;
     }
     MPI_Init(&argc, &argv);
+    char processor_name[128];
+
     int world_size;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
 
     int world_rank;
+    int namelen;
     MPI_Comm_rank(MPI_COMM_WORLD,&world_rank);
+    MPI_Get_processor_name(processor_name,&namelen);
+    fprintf(stderr,"Process %d on %s\n", world_rank, processor_name);
 
     if(world_rank == 0){
         printf("WorldSize=%d\n", world_size);

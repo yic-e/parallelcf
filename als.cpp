@@ -26,7 +26,6 @@ void update(embedding &emb1, embedding &emb2, FLOAT lambda){
             }
         }
 
-        
         auto Mit = boost::numeric::ublas::trans(Mi);
         boost::numeric::ublas::matrix<FLOAT> Ai = boost::numeric::ublas::prod(Mit, Mi)
                 + lambda * rated_num * iden;
