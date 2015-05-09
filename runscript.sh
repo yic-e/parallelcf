@@ -1,11 +1,15 @@
-#PBS -lwalltime=1:00:00      # One hour runtime
-#PBS -lnodes=2:ppn=2         # 2 nodes with 2 cpus each
-#PBS -lpmem=1gb              # 1 GB memory per cpu
-#PBS -Nmpi-verify-openmpi    # the name of the job
-#PBS -o ./log
-#PBS -e ./log
-cd /home/yicheng1/pp-final/parallelcf
+#!/bin/sh
+#PBS -l walltime=1:00:00
+#PBS -l nodes=8:ppn=8
+#PBS -l pmem=1gb
+#PBS -N openmpi
+cd $PBS_O_WORKDIR
+. /opt/torque/etc/openmpi-setup.sh
+export OMP_NUM_THREADS=6
 
-/opt/mpiexec/bin/mpiexec -np 2 ./pals 5 ./train-data 943 1682 50
+#mpirun -mca btl tcp,self -mca plm_rsh_agent ssh --map-by node ./pals 1 20 ./train-data 943 1682 50
+#mpirun -mca btl tcp,self -mca plm_rsh_agent ssh --map-by ppr:1:node ./pals 1 20 ./data/train-data 71567 65353 50
+qstat -f $PBS_JOBID | grep -i resource
 
-qstat -f $PBS_JOBID | grep -i resource  
+#mpirun -np 4 ./pals 1 20 ./data/train-data 71567 65353 50
+#mpirun -mca btl tcp,self -mca plm_rsh_agent ssh --map-by node -np 4 ./pals 1 20 ./data/train-data 71567 65353 50
