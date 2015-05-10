@@ -5,9 +5,22 @@
 #include <immintrin.h>
 #include <string.h>
 #include "inverse.h"
+
+
+static __inline void __attribute__((__always_inline__))
+_mm256_storeu2_m128(float *addr_hi, float *addr_lo, __m256 a)
+{
+    __m128 v128;
+    
+    v128 = _mm256_castps256_ps128(a);
+    _mm_store_ps(addr_lo, v128);
+    v128 = _mm256_extractf128_ps(a, 1);
+    _mm_store_ps(addr_hi, v128);
+}
+
 const int WIDTH = 8;
 inline float vec_sum(__m256 sum){
-    __m128 h = _mm256_extractf128_ps(sum, 0);
+    __m128 h = _mm256_castps256_ps128(sum);
     __m128 l = _mm256_extractf128_ps(sum, 1);
     __m128 s = l + h;
     return s[0] + s[1] + s[2] + s[3];
@@ -31,12 +44,12 @@ inline __m256 mul_vec(const float *arr1, const float *arr2, __m256 sum, int pos,
         return _mm256_setzero_ps();
     if(pos + WIDTH > size){
         __m256i mask = gen_mask(pos, size);
-        __m256 lsh = _mm256_maskload_ps(arr1 + pos, mask);
-        __m256 rsh = _mm256_maskload_ps(arr2 + pos, mask);
+        __m256 lsh = _mm256_maskload_ps(arr1, mask);
+        __m256 rsh = _mm256_maskload_ps(arr2, mask);
         return  _mm256_fmadd_ps(lsh, rsh, sum);
     }else {
-        __m256 lsh = _mm256_load_ps(arr1 + pos);
-        __m256 rsh = _mm256_load_ps(arr2 + pos);
+        __m256 lsh = _mm256_load_ps(arr1);
+        __m256 rsh = _mm256_load_ps(arr2);
         return  _mm256_fmadd_ps(lsh, rsh, sum);
     }
 }
@@ -89,8 +102,13 @@ void array_weighted_add(const float *arr1, float w1, const float *arr2, float w2
 
 float array_dot(const float *arr1, const float *arr2, int size){
     __m256 sum = _mm256_setzero_ps();
+    register const float *rarr1 = arr1;
+    register const float *rarr2 = arr2;
+    
     for(int i = 0; i < size; i += WIDTH){
-        sum = mul_vec(arr1, arr2, sum, i, size);
+        sum = mul_vec(rarr1, rarr2, sum, i, size);
+        rarr1 += WIDTH;
+        rarr2 += WIDTH;
     }
     return vec_sum(sum);
 }
@@ -141,7 +159,6 @@ void matrix_transpose(float *mat1, int row, int col, float *out){
             int o_c = r;
 
             for(int i = 0; i < WIDTH; ++i){
-                //_mm256_stream_ps(out + (o_r + i) * align_row + o_c, b[i]);
                 _mm256_store_ps(out + (o_r + i) * align_row + o_c, b[i]);
             }
         }
@@ -154,18 +171,221 @@ void matrix_slice(float *mat, int col, const int *offset, int num, float *out){
         memcpy(out + i * out_align, mat + offset[i] * out_align, sizeof(float) * col);
     }
 }
+inline __m256 hsum(__m256 *data){
+    data[0] = _mm256_unpacklo_ps(data[0], data[4]) + _mm256_unpackhi_ps(data[0], data[4]);
+    data[1] = _mm256_unpacklo_ps(data[1], data[5]) + _mm256_unpackhi_ps(data[1], data[5]);
+    data[2] = _mm256_unpacklo_ps(data[2], data[6]) + _mm256_unpackhi_ps(data[2], data[6]);
+    data[3] = _mm256_unpacklo_ps(data[3], data[7]) + _mm256_unpackhi_ps(data[3], data[7]);
 
-void matrix_prod_transpose(float *mat, int row, int col, float *out){
-    int col_align = align_32(col);
-    int row_align = align_32(row);
-    for(int i = 0; i < row; ++i){
-        for(int j = 0; j <= i; ++j){
-            out[i * row_align + j] = out[j * row_align + i] =
-                array_dot(mat + i * col_align, mat + j * col_align, col);
+    data[0] = _mm256_unpacklo_ps(data[0], data[2]) + _mm256_unpackhi_ps(data[0], data[2]);
+    data[1] = _mm256_unpacklo_ps(data[1], data[3]) + _mm256_unpackhi_ps(data[1], data[3]);
+
+    data[2] = _mm256_unpacklo_ps(data[0], data[1]);
+    data[3] = _mm256_unpackhi_ps(data[0], data[1]);
+
+    // a b c d a b c d
+    // e f g h e f g h
+        
+    data[0] = _mm256_permute2f128_ps(data[2], data[3], 0x20);
+    data[1] = _mm256_permute2f128_ps(data[2], data[3], 0x31);
+    data[2] = data[0] + data[1];
+    return data[2];
+}
+// a = 4x8
+// b = 4x8
+inline void matrix_prod_transpose4x8(__m256 *a, __m256 *b, __m256 *out){
+    __m256 c[WIDTH];
+    c[0] = a[0] * b[0];
+    c[1] = a[0] * b[1];
+    c[2] = a[0] * b[2];
+    c[3] = a[0] * b[3];
+    c[4] = a[1] * b[0];
+    c[5] = a[1] * b[1];
+    c[6] = a[1] * b[2];
+    c[7] = a[1] * b[3];
+    out[0] = hsum(c);
+    
+    c[0] = a[2] * b[0];
+    c[1] = a[2] * b[1];
+    c[2] = a[2] * b[2];
+    c[3] = a[2] * b[3];
+    c[4] = a[3] * b[0];
+    c[5] = a[3] * b[1];
+    c[6] = a[3] * b[2];
+    c[7] = a[3] * b[3];
+    out[1] = hsum(c);
+}
+inline __m256 loadMatrix(float *m, int row, int col, int crow, int ccol){
+    if(crow >= row){
+        return _mm256_setzero_ps();
+    }
+    if(ccol + WIDTH >= col){
+        __m256i mask = gen_mask(ccol, col);
+        return _mm256_maskload_ps(m, mask);
+    }else{
+        return _mm256_load_ps(m);
+    }
+}
+
+inline void matrix_prod_transpose8x8(float *A, float *B, int row, int col,
+                                     int arow, int brow,
+                                     float *out){
+    int align_row = align_32(row);
+    int align_col = align_32(col);
+    float tmpRes[8*8] __attribute__((aligned (32)));
+    __m256 a[8];
+    __m256 b[8];
+    __m256 c[8];
+    __m256 d[8];
+    for(int i = 0; i < 8; ++i)
+        d[i] = _mm256_setzero_ps();
+
+    for(int k = 0; k < col; k += WIDTH){
+        for(int i = 0; i < 8; ++i){
+            a[i] = loadMatrix(A + align_col * (i + arow) + k,
+                              row, col, arow + i, k);
+            b[i] = loadMatrix(B + align_col * (i + brow) + k,
+                              row, col, brow + i, k);
+        }
+        for(int i = 0; i < 8; ++i)
+            c[i] = _mm256_setzero_ps();
+    
+        for(int i = 0; i < 8; ++i){
+            for(int j = 0; j < 8; ++j){
+                c[j] = a[i] * b[j];
+            }
+            __m256 tmp1 = hsum(c);
+            d[i] += tmp1;
+        }
+    }
+    if(brow + WIDTH >= row){
+        __m256i mask = gen_mask(brow, row);
+        for(int i = 0; i < 8; ++i){
+            _mm256_maskstore_ps(out + align_row * (arow + i) + brow, mask, d[i]);
+        }
+    }else {
+        for(int i = 0; i < 8; ++i){
+            _mm256_store_ps(out + align_row * (arow + i) + brow, d[i]);
+        }
+    }
+
+    if(arow != brow){
+        matrix_transpose8x8_simd(d, a);
+        int x = brow;
+        int y = arow;
+        if(y + WIDTH >= row){
+            __m256i mask = gen_mask(brow, row);
+            for(int i = 0; i < 8; ++i){
+                _mm256_maskstore_ps(out + align_row * (x + i) + y, mask, a[i]);
+            }
+        }else{
+            for(int i = 0; i < 8; ++i){
+                _mm256_store_ps(out + align_row * (x + i) + y, a[i]);
+            }
         }
     }
 }
 
+void matrix_prod_transpose(float *mat, int row, int col, float *out){
+    int align_row = align_32(row);
+    int xi = row / WIDTH;
+    if(row % WIDTH != 0)
+        ++xi;
+#pragma omp parallel for schedule(guided)
+    for(int i = 0; i < xi; ++i){
+        for(int j = 0; j <= i; ++j){
+            matrix_prod_transpose8x8(mat, mat, row, col, i * WIDTH, j * WIDTH, out);
+        }
+    }
+}
+/*
+    
+void matrix_prod_transpose(float *mat, int row, int col, float *out){
+    int col_align = align_32(col);
+    int row_align = align_32(row);
+
+    for(int i = 0; i < row; ++i){
+        for(int j = 0; j <= i; j += WIDTH){
+            __m256 sum[WIDTH];
+            sum[0] = sum[1] = sum[2] = sum[3] = sum[4] = sum[5] = sum[6] = sum[7] = _mm256_setzero_ps();
+            float *arri = mat + col_align * i;
+            float *arr0 = mat + col_align * j;
+            float *arr1 = mat + col_align * (j+1);
+            float *arr2 = mat + col_align * (j+2);
+            float *arr3 = mat + col_align * (j+3);
+            float *arr4 = mat + col_align * (j+4);
+            float *arr5 = mat + col_align * (j+5);
+            float *arr6 = mat + col_align * (j+6);
+            float *arr7 = mat + col_align * (j+7);
+            __m256 lsh, rsh;
+            int k = 0;
+            for(k = 0; k < col - WIDTH; k += WIDTH){
+                lsh = _mm256_load_ps(arri + k);
+                rsh = _mm256_load_ps(arr0 + k);
+                sum[0] = _mm256_fmadd_ps(lsh, rsh, sum[0]);
+                rsh = _mm256_load_ps(arr1 + k);
+                sum[1] = _mm256_fmadd_ps(lsh, rsh, sum[1]);
+                rsh = _mm256_load_ps(arr2 + k);
+                sum[2] = _mm256_fmadd_ps(lsh, rsh, sum[2]);
+                rsh = _mm256_load_ps(arr3 + k);
+                sum[3] = _mm256_fmadd_ps(lsh, rsh, sum[3]);
+                rsh = _mm256_load_ps(arr4 + k);
+                sum[4] = _mm256_fmadd_ps(lsh, rsh, sum[4]);
+                rsh = _mm256_load_ps(arr5 + k);
+                sum[5] = _mm256_fmadd_ps(lsh, rsh, sum[5]);
+                rsh = _mm256_load_ps(arr6 + k);
+                sum[6] = _mm256_fmadd_ps(lsh, rsh, sum[6]);
+                rsh = _mm256_load_ps(arr7 + k);
+                sum[7] = _mm256_fmadd_ps(lsh, rsh, sum[7]);
+            }
+            __m256i mask = gen_mask(k, col);
+            lsh = _mm256_maskload_ps(arri + k, mask);
+            rsh = _mm256_maskload_ps(arr0 + k, mask);
+            sum[0] = _mm256_fmadd_ps(lsh, rsh, sum[0]);
+            rsh = _mm256_maskload_ps(arr1 + k, mask);
+            sum[1] = _mm256_fmadd_ps(lsh, rsh, sum[1]);
+            rsh = _mm256_maskload_ps(arr2 + k, mask);
+            sum[2] = _mm256_fmadd_ps(lsh, rsh, sum[2]);
+            rsh = _mm256_maskload_ps(arr3 + k, mask);
+            sum[3] = _mm256_fmadd_ps(lsh, rsh, sum[3]);
+            rsh = _mm256_maskload_ps(arr4 + k, mask);
+            sum[4] = _mm256_fmadd_ps(lsh, rsh, sum[4]);
+            rsh = _mm256_maskload_ps(arr5 + k, mask);
+            sum[5] = _mm256_fmadd_ps(lsh, rsh, sum[5]);
+            rsh = _mm256_maskload_ps(arr6 + k, mask);
+            sum[6] = _mm256_fmadd_ps(lsh, rsh, sum[6]);
+            rsh = _mm256_maskload_ps(arr7 + k, mask);
+            sum[7] = _mm256_fmadd_ps(lsh, rsh, sum[7]);
+
+            sum[0] = _mm256_unpacklo_ps(sum[0], sum[4]) + _mm256_unpackhi_ps(sum[0], sum[4]);
+            sum[1] = _mm256_unpacklo_ps(sum[1], sum[5]) + _mm256_unpackhi_ps(sum[1], sum[5]);
+            sum[2] = _mm256_unpacklo_ps(sum[2], sum[6]) + _mm256_unpackhi_ps(sum[2], sum[6]);
+            sum[3] = _mm256_unpacklo_ps(sum[3], sum[7]) + _mm256_unpackhi_ps(sum[3], sum[7]);
+
+            sum[0] = _mm256_unpacklo_ps(sum[0], sum[2]) + _mm256_unpackhi_ps(sum[0], sum[2]);
+            sum[1] = _mm256_unpacklo_ps(sum[1], sum[3]) + _mm256_unpackhi_ps(sum[1], sum[3]);
+
+            sum[2] = _mm256_unpacklo_ps(sum[0], sum[1]);
+            sum[3] = _mm256_unpackhi_ps(sum[0], sum[1]);
+
+            sum[0] = _mm256_permute2f128_ps(sum[2], sum[3], 0x20);
+            sum[1] = _mm256_permute2f128_ps(sum[2], sum[3], 0x31);
+            sum[2] = sum[0] + sum[1];
+        
+            _mm256_store_ps(out + i * row_align + j , sum[2]);
+
+            out[j * row_align + i] = out[i * row_align + j];
+            out[(j+1) * row_align + i] = out[i * row_align + j + 1];
+            out[(j+2) * row_align + i] = out[i * row_align + j + 2];
+            out[(j+3) * row_align + i] = out[i * row_align + j + 3];
+            out[(j+4) * row_align + i] = out[i * row_align + j + 4];
+            out[(j+5) * row_align + i] = out[i * row_align + j + 5];
+            out[(j+6) * row_align + i] = out[i * row_align + j + 6];
+            out[(j+7) * row_align + i] = out[i * row_align + j + 7];
+        }
+    }
+}
+*/
 void matrix_add_eye(float *mat, int size, float v){
     int size_align = align_32(size);
     for(int i = 0; i < size; ++i)
@@ -179,12 +399,7 @@ void matrix_sub_prod_vector(const float *sub, const float *mat, int row, int col
         out[i] = sub[i] - p;
     }
 }
-inline void prefetch_8(const float *addr){
-    _mm_prefetch(addr, _MM_HINT_T0);
-    _mm_prefetch(addr + 2, _MM_HINT_T0);
-    _mm_prefetch(addr + 4, _MM_HINT_T0);
-    _mm_prefetch(addr + 6, _MM_HINT_T0);
-}
+
 void matrix_prod_vector(const float *mat, int row, int col, const float *vec, float *out){
     int col_align = align_32(col);
     __m256 data[WIDTH];
@@ -221,6 +436,8 @@ void matrix_prod_vector(const float *mat, int row, int col, const float *vec, fl
         data[7] = _mm256_fmadd_ps(_mm256_maskload_ps(mat + col_align * (i+7) + j, mask), col_data, data[7]);
 
 
+        
+        
         data[0] = _mm256_unpacklo_ps(data[0], data[4]) + _mm256_unpackhi_ps(data[0], data[4]);
         data[1] = _mm256_unpacklo_ps(data[1], data[5]) + _mm256_unpackhi_ps(data[1], data[5]);
         data[2] = _mm256_unpacklo_ps(data[2], data[6]) + _mm256_unpackhi_ps(data[2], data[6]);
