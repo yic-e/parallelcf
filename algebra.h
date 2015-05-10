@@ -1,5 +1,6 @@
 #ifndef __ALGEBRA_H__
 #define __ALGEBRA_H__
+void set_algebra_ompthread(int t);
 float array_diff_norm(const float *arr1, const float *arr2, int size);
 float array_dot(const float *arr1, const float *arr2, int size);
 void array_weighted_add(const float *arr1, float w1, const float *arr2, float w2, float *out, int size);

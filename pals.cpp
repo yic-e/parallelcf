@@ -40,7 +40,7 @@ void test(embedding &emb1, embedding &emb2, int orig){
 }
 
 int main(int argc, char *argv[]){
-    if(argc != 7){
+    if(argc != 8){
         cerr<<"usage: "<< argv[0] << "optimized K data user_num movie_num iter_num" << endl;
         return 1;
     }
@@ -49,11 +49,23 @@ int main(int argc, char *argv[]){
 
     int world_size;
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-
+    int omp_t = atoi(argv[7]);
     int world_rank;
     int namelen;
     MPI_Comm_rank(MPI_COMM_WORLD,&world_rank);
     MPI_Get_processor_name(processor_name,&namelen);
+
+#pragma omp parallel
+    {
+        int tid = omp_get_thread_num();
+        if (tid == 0){
+            if(omp_t == -1){
+                omp_t = omp_get_num_procs();
+                printf("OMPT=%d\n", omp_t);
+            }
+        }
+    }
+    omp_set_num_threads(omp_t);
 #pragma omp parallel
     {
         int tid = omp_get_thread_num();
@@ -62,6 +74,7 @@ int main(int argc, char *argv[]){
             fprintf(stderr,"Process=%d\tProcessorName=%s\tProcsNum=%d\tThreadNum=%d\n", world_rank, processor_name, omp_get_num_procs(), nthreads);
         }
     }
+    set_algebra_ompthread(8 > omp_t ? omp_t : 8);
     if(world_rank == 0){
         printf("WorldSize=%d\n", world_size);
     }
